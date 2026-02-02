@@ -70,7 +70,7 @@ def process_video_frontal(video_file, frame_skip=2):
             # Genou valgus/varus
             results["Genou G"].append(angle(kp[JOINTS_IDX["Hanche G"],:2], kp[JOINTS_IDX["Genou G"],:2], kp[JOINTS_IDX["Cheville G"],:2]))
             results["Genou D"].append(angle(kp[JOINTS_IDX["Hanche D"],:2], kp[JOINTS_IDX["Genou D"],:2], kp[JOINTS_IDX["Cheville D"],:2]))
-            # Cheville inclinaison latérale
+            # Cheville inversion/éversion
             results["Cheville G"].append(angle(kp[JOINTS_IDX["Genou G"],:2], kp[JOINTS_IDX["Cheville G"],:2], kp[JOINTS_IDX["Cheville G"],:2]+np.array([1,0])))
             results["Cheville D"].append(angle(kp[JOINTS_IDX["Genou D"],:2], kp[JOINTS_IDX["Cheville D"],:2], kp[JOINTS_IDX["Cheville D"],:2]+np.array([1,0])))
             # Tronc (inclinaison latérale)
@@ -84,25 +84,25 @@ def process_video_frontal(video_file, frame_skip=2):
     return results
 
 # ==============================
-# MODÈLE NORMAL FRONTAL
+# MODÈLE NORMAL FRONTAL (Basé sur tes normes)
 # ==============================
-def normal_ankle(length=100, sigma=2):
-    cycle_percent = np.array([0, 10, 40, 60, 80, 100])
-    angles = np.array([0, -5, 10, -17.5, 0, 0])
-    x = np.linspace(0, 100, length)
-    curve = np.interp(x, cycle_percent, angles)
-    return gaussian_filter1d(curve, sigma=sigma)
-
-def normal_knee(length=100, sigma=2):
-    cycle_percent = np.array([0, 15, 40, 60, 75, 100])
-    angles = np.array([5, 18, 3, 35, 60, 5])
-    x = np.linspace(0, 100, length)
-    curve = np.interp(x, cycle_percent, angles)
-    return gaussian_filter1d(curve, sigma=sigma)
-
 def normal_hip_frontal(length=100, sigma=2):
-    cycle_percent = np.array([0, 25, 50, 75, 100])
-    angles = np.array([0, 5, 0, -5, 0])
+    cycle_percent = np.array([0, 15, 45, 60, 75, 100])
+    angles = np.array([-5, -5, -10, 0, 5, 0])
+    x = np.linspace(0, 100, length)
+    curve = np.interp(x, cycle_percent, angles)
+    return gaussian_filter1d(curve, sigma=sigma)
+
+def normal_knee_frontal(length=100, sigma=2):
+    cycle_percent = np.array([0, 60, 100])
+    angles = np.array([-3.5, -3.5, 0])
+    x = np.linspace(0, 100, length)
+    curve = np.interp(x, cycle_percent, angles)
+    return gaussian_filter1d(curve, sigma=sigma)
+
+def normal_ankle_frontal(length=100, sigma=2):
+    cycle_percent = np.array([0, 5, 15, 45, 60, 80, 100])
+    angles = np.array([3, -5, -5, 0, 5, 2, 0])
     x = np.linspace(0, 100, length)
     curve = np.interp(x, cycle_percent, angles)
     return gaussian_filter1d(curve, sigma=sigma)
@@ -178,7 +178,7 @@ if video_ready and st.button("⚙️ Lancer l'analyse"):
         summary_table = []
 
         articulation_pairs = [("Hanche G","Hanche D"), ("Genou G","Genou D"), ("Cheville G","Cheville D")]
-        normal_funcs = [normal_hip_frontal, normal_knee, normal_ankle]
+        normal_funcs = [normal_hip_frontal, normal_knee_frontal, normal_ankle_frontal]
 
         for (joint_pair, normal_func) in zip(articulation_pairs, normal_funcs):
             col1, col2 = st.columns(2)
