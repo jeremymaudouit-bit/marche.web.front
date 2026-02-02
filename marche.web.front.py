@@ -84,30 +84,30 @@ def process_video_frontal(video_file, frame_skip=2):
     return results
 
 # ==============================
-# MODÈLE NORMAL FRONTAL (Basé sur tes normes)
+# MODÈLE NORMAL FRONTAL (courbes plus lisses)
 # ==============================
-def normal_hip_frontal(length=100, sigma=2):
+def normal_hip_frontal(length=100, sigma=5):
     cycle_percent = np.array([0, 15, 45, 60, 75, 100])
     angles = np.array([-5, -5, -10, 0, 5, 0])
     x = np.linspace(0, 100, length)
     curve = np.interp(x, cycle_percent, angles)
     return gaussian_filter1d(curve, sigma=sigma)
 
-def normal_knee_frontal(length=100, sigma=2):
+def normal_knee_frontal(length=100, sigma=5):
     cycle_percent = np.array([0, 60, 100])
     angles = np.array([-3.5, -3.5, 0])
     x = np.linspace(0, 100, length)
     curve = np.interp(x, cycle_percent, angles)
     return gaussian_filter1d(curve, sigma=sigma)
 
-def normal_ankle_frontal(length=100, sigma=2):
+def normal_ankle_frontal(length=100, sigma=5):
     cycle_percent = np.array([0, 5, 15, 45, 60, 80, 100])
     angles = np.array([3, -5, -5, 0, 5, 2, 0])
     x = np.linspace(0, 100, length)
     curve = np.interp(x, cycle_percent, angles)
     return gaussian_filter1d(curve, sigma=sigma)
 
-def normal_pelvis(length=100, sigma=2):
+def normal_pelvis(length=100, sigma=5):
     t = np.linspace(0, 1, length)
     curve = 5*np.sin(2*np.pi*t)
     return gaussian_filter1d(curve, sigma=sigma)
@@ -203,7 +203,7 @@ if video_ready and st.button("⚙️ Lancer l'analyse"):
             if show_normal:
                 fig2, ax2 = plt.subplots(figsize=(6,4))
                 length = len(results[joint_pair[0]])
-                normal_curve = normal_func(length)
+                normal_curve = normal_func(length, sigma=smoothing*2)  # courbes normales plus lisses
                 ax2.plot(normal_curve, lw=2, color='green', label="Modèle normal")
                 ax2.set_title(f"{joint_pair[0].split()[0]} : Modèle normal")
                 ax2.set_xlabel("Frame")
@@ -220,7 +220,7 @@ if video_ready and st.button("⚙️ Lancer l'analyse"):
         fig, ax = plt.subplots(figsize=(10,4))
         ax.plot(angles_smooth, lw=2, color='purple', label="Pelvis réel")
         if show_normal:
-            normal_curve = normal_pelvis(len(angles_smooth))
+            normal_curve = normal_pelvis(len(angles_smooth), sigma=smoothing*2)
             ax.plot(normal_curve, lw=2, color='green', linestyle='--', label="Pelvis modèle")
         ax.set_title("Bascule Pelvis")
         ax.set_xlabel("Frame")
