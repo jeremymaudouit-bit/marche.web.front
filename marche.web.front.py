@@ -23,8 +23,8 @@ import streamlit.components.v1 as components
 # ==============================
 # CONFIG
 # ==============================
-st.set_page_config("GaitScan Pro (MediaPipe)", layout="wide")
-st.title("🏃 GaitScan Pro – Analyse Cinématique")
+st.set_page_config("GaitScan Pro (Vue arrière/frontale)", layout="wide")
+st.title("🏃 GaitScan Pro – Analyse Frontale / Vue arrière")
 FPS = 30
 
 # ==============================
@@ -47,16 +47,21 @@ pose = load_pose()
 # ==============================
 # NORMES
 # ==============================
-def norm_curve(joint, n):
+def norm_curve(metric, n):
     x = np.linspace(0, 100, n)
-    if joint == "Genou":
-        return np.interp(x, [0, 15, 40, 60, 80, 100], [5, 15, 5, 40, 60, 5])
-    if joint == "Hanche":
-        return np.interp(x, [0, 30, 60, 100], [30, 0, -10, 30])
-    if joint == "Cheville":
-        return np.interp(x, [0, 10, 50, 70, 100], [5, 10, 25, 10, 5])
-    if joint == "Tronc":
-        return np.zeros(n)
+
+    if metric in ["Genou G", "Genou D"]:
+        return np.interp(x, [0, 25, 50, 75, 100], [2, 5, 0, -5, 2])
+
+    if metric in ["Arriere-pied G", "Arriere-pied D"]:
+        return np.interp(x, [0, 25, 50, 75, 100], [1, 3, 0, -3, 1])
+
+    if metric == "Bassin":
+        return np.interp(x, [0, 25, 50, 75, 100], [0, 2, 0, -2, 0])
+
+    if metric == "Tronc":
+        return np.interp(x, [0, 25, 50, 75, 100], [0, 2, 0, -2, 0])
+
     return np.zeros(n)
 
 def smooth_ma(y, win=7):
@@ -141,42 +146,72 @@ def detect_pose(frame):
     return kp
 
 # ==============================
-# ANGLES
+# ANGLES FRONTAUX
 # ==============================
-def angle(a, b, c):
-    ba = a - b
-    bc = c - b
+def angle_3pts(a, b, c):
+    """
+    Angle géométrique (0-180°) au point b entre les segments b->a et b->c.
+    """
+    ba = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
+    bc = np.asarray(c, dtype=float) - np.asarray(b, dtype=float)
+
     ba[1] *= -1
     bc[1] *= -1
-    cosv = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-6)
-    return float(np.degrees(np.arccos(np.clip(cosv, -1, 1))))
 
-def angle_between(v1, v2):
-    v1 = np.asarray(v1, dtype=float).copy()
-    v2 = np.asarray(v2, dtype=float).copy()
-    v1[1] *= -1
-    v2[1] *= -1
-    cosv = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6)
-    return float(np.degrees(np.arccos(np.clip(cosv, -1, 1))))
+    denom = (np.linalg.norm(ba) * np.linalg.norm(bc)) + 1e-9
+    cosv = np.dot(ba, bc) / denom
+    cosv = np.clip(cosv, -1.0, 1.0)
+    return float(np.degrees(np.arccos(cosv)))
 
-def angle_hanche(e, h, g):
-    return 180 - angle(e, h, g)
+def signed_angle_vs_vertical(p1, p2):
+    v = np.asarray(p2, dtype=float) - np.asarray(p1, dtype=float)
+    vx = v[0]
+    vy = -(v[1])
+    ang = np.degrees(np.arctan2(vx, vy + 1e-9))
+    return float(ang)
 
-def angle_genou(h, g, c):
-    return 180 - angle(h, g, c)
+def signed_angle_vs_horizontal(p1, p2):
+    v = np.asarray(p2, dtype=float) - np.asarray(p1, dtype=float)
+    vx = v[0]
+    vy = -(v[1])
+    ang = np.degrees(np.arctan2(vy, vx + 1e-9))
+    return float(ang)
 
-def angle_cheville_brut(g, c, t, o):
-    jambe = g - c
-    pied = o - t
-    return angle_between(jambe, pied)
+def angle_genou_frontal(hip, knee, ankle, side=None):
+    """
+    Déviation frontale du genou = angle cuisse/jambe.
+    0° ~ alignement neutre.
+    """
+    raw = angle_3pts(hip, knee, ankle)
+    dev = 180.0 - raw
 
-def angle_cheville(g, c, t, o):
-    return angle_cheville_brut(g, c, t, o) - 90.0
+    hip = np.asarray(hip, dtype=float)
+    knee = np.asarray(knee, dtype=float)
+    ankle = np.asarray(ankle, dtype=float)
 
-def angle_tronc(epaule, hanche):
-    v = np.asarray(epaule, dtype=float) - np.asarray(hanche, dtype=float)
-    v[1] *= -1
-    return float(np.degrees(np.arctan2(v[0], v[1] + 1e-6)))
+    v1 = knee - hip
+    v2 = ankle - hip
+    cross = v1[0] * v2[1] - v1[1] * v2[0]
+
+    if side == "G":
+        sign = -1.0 if cross > 0 else 1.0
+    elif side == "D":
+        sign = 1.0 if cross > 0 else -1.0
+    else:
+        sign = 1.0 if cross > 0 else -1.0
+
+    return float(sign * abs(dev))
+
+def angle_arriere_pied_frontal(ankle, heel):
+    return signed_angle_vs_vertical(ankle, heel)
+
+def angle_bassin_frontal(hipL, hipR):
+    return signed_angle_vs_horizontal(hipL, hipR)
+
+def angle_tronc_frontal(shL, shR, hipL, hipR):
+    mid_sh = (np.asarray(shL) + np.asarray(shR)) / 2.0
+    mid_hip = (np.asarray(hipL) + np.asarray(hipR)) / 2.0
+    return signed_angle_vs_vertical(mid_hip, mid_sh)
 
 # ==============================
 # CONTACTS SOL + CYCLE
@@ -225,7 +260,15 @@ def detect_cycle(y):
 # ==============================
 def process_video(path, conf):
     cap = cv2.VideoCapture(path)
-    res = {k: [] for k in ["Hanche G", "Hanche D", "Genou G", "Genou D", "Cheville G", "Cheville D", "Tronc G", "Tronc D"]}
+
+    res = {
+        "Genou G": [],
+        "Genou D": [],
+        "Arriere-pied G": [],
+        "Arriere-pied D": [],
+        "Bassin": [],
+        "Tronc": [],
+    }
 
     heelG_y, heelD_y = [], []
     heelG_x, heelD_x = [], []
@@ -254,40 +297,32 @@ def process_video(path, conf):
         def ok(n):
             return kp.get(f"{n} vis", 0.0) >= conf
 
-        res["Hanche G"].append(
-            angle_hanche(kp["Epaule G"], kp["Hanche G"], kp["Genou G"])
-            if (ok("Epaule G") and ok("Hanche G") and ok("Genou G")) else np.nan
-        )
-        res["Hanche D"].append(
-            angle_hanche(kp["Epaule D"], kp["Hanche D"], kp["Genou D"])
-            if (ok("Epaule D") and ok("Hanche D") and ok("Genou D")) else np.nan
-        )
-
-        res["Tronc G"].append(
-            angle_tronc(kp["Epaule G"], kp["Hanche G"])
-            if (ok("Epaule G") and ok("Hanche G")) else np.nan
-        )
-        res["Tronc D"].append(
-            angle_tronc(kp["Epaule D"], kp["Hanche D"])
-            if (ok("Epaule D") and ok("Hanche D")) else np.nan
-        )
-
         res["Genou G"].append(
-            angle_genou(kp["Hanche G"], kp["Genou G"], kp["Cheville G"])
+            angle_genou_frontal(kp["Hanche G"], kp["Genou G"], kp["Cheville G"], side="G")
             if (ok("Hanche G") and ok("Genou G") and ok("Cheville G")) else np.nan
         )
         res["Genou D"].append(
-            angle_genou(kp["Hanche D"], kp["Genou D"], kp["Cheville D"])
+            angle_genou_frontal(kp["Hanche D"], kp["Genou D"], kp["Cheville D"], side="D")
             if (ok("Hanche D") and ok("Genou D") and ok("Cheville D")) else np.nan
         )
 
-        res["Cheville G"].append(
-            angle_cheville(kp["Genou G"], kp["Cheville G"], kp["Talon G"], kp["Orteil G"])
-            if (ok("Genou G") and ok("Cheville G") and ok("Talon G") and ok("Orteil G")) else np.nan
+        res["Arriere-pied G"].append(
+            angle_arriere_pied_frontal(kp["Cheville G"], kp["Talon G"])
+            if (ok("Cheville G") and ok("Talon G")) else np.nan
         )
-        res["Cheville D"].append(
-            angle_cheville(kp["Genou D"], kp["Cheville D"], kp["Talon D"], kp["Orteil D"])
-            if (ok("Genou D") and ok("Cheville D") and ok("Talon D") and ok("Orteil D")) else np.nan
+        res["Arriere-pied D"].append(
+            angle_arriere_pied_frontal(kp["Cheville D"], kp["Talon D"])
+            if (ok("Cheville D") and ok("Talon D")) else np.nan
+        )
+
+        res["Bassin"].append(
+            angle_bassin_frontal(kp["Hanche G"], kp["Hanche D"])
+            if (ok("Hanche G") and ok("Hanche D")) else np.nan
+        )
+
+        res["Tronc"].append(
+            angle_tronc_frontal(kp["Epaule G"], kp["Epaule D"], kp["Hanche G"], kp["Hanche D"])
+            if (ok("Epaule G") and ok("Epaule D") and ok("Hanche G") and ok("Hanche D")) else np.nan
         )
 
         heelG_y.append(float(kp["Talon G"][1]) if ok("Talon G") else np.nan)
@@ -305,76 +340,22 @@ def process_video(path, conf):
 # ==============================
 # ANNOTATION IMAGES
 # ==============================
-def draw_angle_on_frame(img_bgr, pA, pB, pC, ang_deg, color=(0, 255, 0)):
+def draw_segment_with_angle(img_bgr, p1, p2, ang_deg, label, color=(0, 255, 0)):
     h, w = img_bgr.shape[:2]
-    A = (int(pA[0] * w), int(pA[1] * h))
-    B = (int(pB[0] * w), int(pB[1] * h))
-    C = (int(pC[0] * w), int(pC[1] * h))
+    P1 = (int(p1[0] * w), int(p1[1] * h))
+    P2 = (int(p2[0] * w), int(p2[1] * h))
 
-    line_th = 4
-    circle_r = 7
-    text_scale = 1.2
-    text_th = 3
+    cv2.line(img_bgr, P1, P2, color, 4)
+    cv2.circle(img_bgr, P1, 6, (0, 0, 255), -1)
+    cv2.circle(img_bgr, P2, 6, (0, 0, 255), -1)
 
-    cv2.line(img_bgr, A, B, color, line_th)
-    cv2.line(img_bgr, C, B, color, line_th)
-    cv2.circle(img_bgr, B, circle_r, (0, 0, 255), -1)
-
-    label = f"{int(round(ang_deg))} deg"
-    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, text_scale, text_th)
-    tx, ty = B[0] + 10, B[1] - 10
-    cv2.rectangle(img_bgr, (tx - 4, ty - th - 6), (tx + tw + 6, ty + 6), (0, 0, 0), -1)
-    cv2.putText(img_bgr, label, (tx, ty),
-                cv2.FONT_HERSHEY_SIMPLEX, text_scale, (255, 255, 255), text_th, cv2.LINE_AA)
-
-def draw_ankle_angle_on_frame(img_bgr, knee, ankle, heel, toe, ang_deg, color=(0, 255, 0)):
-    h, w = img_bgr.shape[:2]
-
-    K = (int(knee[0] * w), int(knee[1] * h))
-    A = (int(ankle[0] * w), int(ankle[1] * h))
-    H = (int(heel[0] * w), int(heel[1] * h))
-    T = (int(toe[0] * w), int(toe[1] * h))
-
-    line_th = 4
-    circle_r = 7
-    text_scale = 1.2
-    text_th = 3
-
-    cv2.line(img_bgr, K, A, color, line_th)
-    cv2.line(img_bgr, H, T, color, line_th)
-    cv2.circle(img_bgr, A, circle_r, (0, 0, 255), -1)
-
-    label = f"{int(round(ang_deg))} deg"
-    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, text_scale, text_th)
-    tx, ty = A[0] + 10, A[1] - 10
-    cv2.rectangle(img_bgr, (tx - 4, ty - th - 6), (tx + tw + 6, ty + 6), (0, 0, 0), -1)
-    cv2.putText(img_bgr, label, (tx, ty),
-                cv2.FONT_HERSHEY_SIMPLEX, text_scale, (255, 255, 255), text_th, cv2.LINE_AA)
-
-def draw_trunk_angle_on_frame(img_bgr, shoulder, hip, ang_deg, color=(255, 165, 0)):
-    h, w = img_bgr.shape[:2]
-
-    S = (int(shoulder[0] * w), int(shoulder[1] * h))
-    H = (int(hip[0] * w), int(hip[1] * h))
-
-    ref_len = int(0.18 * h)
-    V = (H[0], H[1] - ref_len)
-
-    line_th = 4
-    circle_r = 7
-    text_scale = 1.0
-    text_th = 3
-
-    cv2.line(img_bgr, H, S, color, line_th)
-    cv2.line(img_bgr, H, V, (200, 200, 200), 2)
-    cv2.circle(img_bgr, H, circle_r, (0, 0, 255), -1)
-
-    label = f"Tronc {ang_deg:+.1f} deg"
-    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, text_scale, text_th)
-    tx, ty = H[0] + 10, H[1] + 30
-    cv2.rectangle(img_bgr, (tx - 4, ty - th - 6), (tx + tw + 6, ty + 6), (0, 0, 0), -1)
-    cv2.putText(img_bgr, label, (tx, ty),
-                cv2.FONT_HERSHEY_SIMPLEX, text_scale, (255, 255, 255), text_th, cv2.LINE_AA)
+    txt = f"{label}: {ang_deg:.1f}°"
+    tx, ty = P2[0] + 10, P2[1] - 10
+    cv2.rectangle(img_bgr, (tx - 4, ty - 30), (tx + 180, ty + 6), (0, 0, 0), -1)
+    cv2.putText(
+        img_bgr, txt, (tx, ty),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA
+    )
 
 def annotate_frame(frame_bgr, kp, conf=0.30):
     if kp is None:
@@ -385,61 +366,67 @@ def annotate_frame(frame_bgr, kp, conf=0.30):
 
     out = frame_bgr.copy()
 
-    if ok("Epaule G") and ok("Hanche G"):
-        draw_trunk_angle_on_frame(
-            out,
-            kp["Epaule G"],
-            kp["Hanche G"],
-            angle_tronc(kp["Epaule G"], kp["Hanche G"])
-        )
-    if ok("Epaule D") and ok("Hanche D"):
-        draw_trunk_angle_on_frame(
-            out,
-            kp["Epaule D"],
-            kp["Hanche D"],
-            angle_tronc(kp["Epaule D"], kp["Hanche D"])
-        )
-
-    if ok("Epaule G") and ok("Hanche G") and ok("Genou G"):
-        draw_angle_on_frame(out, kp["Epaule G"], kp["Hanche G"], kp["Genou G"],
-                            angle_hanche(kp["Epaule G"], kp["Hanche G"], kp["Genou G"]))
-    if ok("Epaule D") and ok("Hanche D") and ok("Genou D"):
-        draw_angle_on_frame(out, kp["Epaule D"], kp["Hanche D"], kp["Genou D"],
-                            angle_hanche(kp["Epaule D"], kp["Hanche D"], kp["Genou D"]))
-
+    # Genoux
     if ok("Hanche G") and ok("Genou G") and ok("Cheville G"):
-        draw_angle_on_frame(out, kp["Hanche G"], kp["Genou G"], kp["Cheville G"],
-                            angle_genou(kp["Hanche G"], kp["Genou G"], kp["Cheville G"]))
-    if ok("Hanche D") and ok("Genou D") and ok("Cheville D"):
-        draw_angle_on_frame(out, kp["Hanche D"], kp["Genou D"], kp["Cheville D"],
-                            angle_genou(kp["Hanche D"], kp["Genou D"], kp["Cheville D"]))
-
-    if ok("Genou G") and ok("Cheville G") and ok("Talon G") and ok("Orteil G"):
-        draw_ankle_angle_on_frame(
-            out,
-            kp["Genou G"], kp["Cheville G"], kp["Talon G"], kp["Orteil G"],
-            angle_cheville_brut(kp["Genou G"], kp["Cheville G"], kp["Talon G"], kp["Orteil G"])
+        draw_segment_with_angle(
+            out, kp["Hanche G"], kp["Genou G"],
+            angle_genou_frontal(kp["Hanche G"], kp["Genou G"], kp["Cheville G"], side="G"),
+            "Genou G"
         )
-    if ok("Genou D") and ok("Cheville D") and ok("Talon D") and ok("Orteil D"):
-        draw_ankle_angle_on_frame(
-            out,
-            kp["Genou D"], kp["Cheville D"], kp["Talon D"], kp["Orteil D"],
-            angle_cheville_brut(kp["Genou D"], kp["Cheville D"], kp["Talon D"], kp["Orteil D"])
+        h, w = out.shape[:2]
+        K = (int(kp["Genou G"][0] * w), int(kp["Genou G"][1] * h))
+        A = (int(kp["Cheville G"][0] * w), int(kp["Cheville G"][1] * h))
+        cv2.line(out, K, A, (0, 255, 0), 4)
+
+    if ok("Hanche D") and ok("Genou D") and ok("Cheville D"):
+        draw_segment_with_angle(
+            out, kp["Hanche D"], kp["Genou D"],
+            angle_genou_frontal(kp["Hanche D"], kp["Genou D"], kp["Cheville D"], side="D"),
+            "Genou D"
+        )
+        h, w = out.shape[:2]
+        K = (int(kp["Genou D"][0] * w), int(kp["Genou D"][1] * h))
+        A = (int(kp["Cheville D"][0] * w), int(kp["Cheville D"][1] * h))
+        cv2.line(out, K, A, (0, 255, 0), 4)
+
+    # Arrière-pied
+    if ok("Cheville G") and ok("Talon G"):
+        draw_segment_with_angle(
+            out, kp["Cheville G"], kp["Talon G"],
+            angle_arriere_pied_frontal(kp["Cheville G"], kp["Talon G"]),
+            "AP G"
+        )
+
+    if ok("Cheville D") and ok("Talon D"):
+        draw_segment_with_angle(
+            out, kp["Cheville D"], kp["Talon D"],
+            angle_arriere_pied_frontal(kp["Cheville D"], kp["Talon D"]),
+            "AP D"
+        )
+
+    # Bassin
+    if ok("Hanche G") and ok("Hanche D"):
+        draw_segment_with_angle(
+            out, kp["Hanche G"], kp["Hanche D"],
+            angle_bassin_frontal(kp["Hanche G"], kp["Hanche D"]),
+            "Bassin"
+        )
+
+    # Tronc
+    if ok("Epaule G") and ok("Epaule D") and ok("Hanche G") and ok("Hanche D"):
+        mid_sh = (kp["Epaule G"] + kp["Epaule D"]) / 2.0
+        mid_hip = (kp["Hanche G"] + kp["Hanche D"]) / 2.0
+        draw_segment_with_angle(
+            out, mid_hip, mid_sh,
+            angle_tronc_frontal(kp["Epaule G"], kp["Epaule D"], kp["Hanche G"], kp["Hanche D"]),
+            "Tronc"
         )
 
     return out
 
 # ==============================
-# STEP LENGTH + ASYMMETRY
+# ASYMMETRY
 # ==============================
-def nan_interp(x):
-    x = np.array(x, dtype=float)
-    idx = np.arange(len(x))
-    ok = ~np.isnan(x)
-    if ok.sum() >= 2:
-        return np.interp(idx, idx[ok], x[ok])
-    return None
-
 def asym_percent(left, right):
     if left is None or right is None:
         return None
@@ -447,53 +434,6 @@ def asym_percent(left, right):
     if abs(denom) < 1e-6:
         return None
     return 100.0 * abs(right - left) / abs(denom)
-
-def compute_step_length_cm(heelG_y, heelD_y, heelG_x, heelD_x, toeG_x, toeD_x, taille_cm):
-    """
-    Longueur du pas estimée en 2D :
-    - pas gauche = distance horizontale entre talon gauche à l'attaque
-      et avant-pied droit
-    - pas droit = distance horizontale entre talon droit à l'attaque
-      et avant-pied gauche
-    """
-
-    contactsG, _ = detect_foot_contacts(heelG_y, fps=FPS)
-    contactsD, _ = detect_foot_contacts(heelD_y, fps=FPS)
-
-    hGx = nan_interp(heelG_x)
-    hDx = nan_interp(heelD_x)
-    tGx = nan_interp(toeG_x)
-    tDx = nan_interp(toeD_x)
-
-    if hGx is None or hDx is None or tGx is None or tDx is None:
-        return None, None, None, None, None
-
-    stepG_list = []
-    stepD_list = []
-
-    for i in contactsG:
-        if 0 <= i < len(hGx) and 0 <= i < len(tDx):
-            stepG_list.append(abs(hGx[i] - tDx[i]))
-
-    for i in contactsD:
-        if 0 <= i < len(hDx) and 0 <= i < len(tGx):
-            stepD_list.append(abs(hDx[i] - tGx[i]))
-
-    valid_norm = stepG_list + stepD_list
-    if len(valid_norm) == 0:
-        return None, None, None, None, None
-
-    scale = float(taille_cm) / 0.53
-
-    stepG_cm = float(np.mean(stepG_list) * scale) if len(stepG_list) > 0 else None
-    stepD_cm = float(np.mean(stepD_list) * scale) if len(stepD_list) > 0 else None
-
-    valid_cm = [v for v in [stepG_cm, stepD_cm] if v is not None]
-    step_mean_cm = float(np.mean(valid_cm))
-    step_std_cm = float(np.std(valid_cm))
-    step_asym = asym_percent(stepG_cm, stepD_cm)
-
-    return step_mean_cm, step_std_cm, stepG_cm, stepD_cm, step_asym
 
 # ==============================
 # PDF EXPORT
@@ -511,7 +451,7 @@ def export_pdf(patient, keyframe_path, figures, table_data, annotated_images,
     styles = getSampleStyleSheet()
     story = []
 
-    story.append(Paragraph("<b>GaitScan Pro – Analyse Cinématique</b>", styles["Title"]))
+    story.append(Paragraph("<b>GaitScan Pro – Analyse Frontale</b>", styles["Title"]))
     story.append(Spacer(1, 0.2 * cm))
 
     story.append(Paragraph(
@@ -524,20 +464,6 @@ def export_pdf(patient, keyframe_path, figures, table_data, annotated_images,
         styles["Normal"]
     ))
     story.append(Spacer(1, 0.35 * cm))
-
-    if step_info is not None:
-        story.append(Paragraph("<b>Paramètres spatio-temporels (estimation)</b>", styles["Heading2"]))
-        story.append(Paragraph(
-            f"<b>Longueur de pas moyenne :</b> {step_info['mean']:.1f} cm<br/>"
-            f"<b>Variabilité :</b> ± {step_info['std']:.1f} cm<br/>"
-            + (f"<b>Pas G :</b> {step_info['G']:.1f} cm &nbsp;&nbsp; <b>Pas D :</b> {step_info['D']:.1f} cm<br/>"
-               if step_info.get("G") is not None and step_info.get("D") is not None else "")
-            + (f"<b>Asymétrie pas (G/D) :</b> {step_info['asym']:.1f} %<br/>"
-               if step_info.get("asym") is not None else "")
-            + "<i>Mesure monocaméra 2D sans calibration métrique : valeurs estimées.</i>",
-            styles["Normal"]
-        ))
-        story.append(Spacer(1, 0.25 * cm))
 
     if temporal_info is not None:
         story.append(Paragraph("<b>Paramètres temporels</b>", styles["Heading2"]))
@@ -574,7 +500,7 @@ def export_pdf(patient, keyframe_path, figures, table_data, annotated_images,
         story.append(Spacer(1, 0.3 * cm))
 
     if asym_table:
-        story.append(Paragraph("<b>Asymétries droite/gauche (angles)</b>", styles["Heading2"]))
+        story.append(Paragraph("<b>Asymétries droite/gauche</b>", styles["Heading2"]))
         t = Table([["Mesure", "Moy G", "Moy D", "Asym %"]] + asym_table,
                   colWidths=[6 * cm, 3 * cm, 3 * cm, 3 * cm])
         t.setStyle(TableStyle([
@@ -589,7 +515,7 @@ def export_pdf(patient, keyframe_path, figures, table_data, annotated_images,
     story.append(PDFImage(keyframe_path, width=16 * cm, height=8 * cm))
     story.append(Spacer(1, 0.4 * cm))
 
-    story.append(Paragraph("<b>Analyse articulaire</b>", styles["Heading2"]))
+    story.append(Paragraph("<b>Analyse frontale</b>", styles["Heading2"]))
     story.append(Spacer(1, 0.2 * cm))
     for joint, figpath in figures.items():
         story.append(Paragraph(f"<b>{joint}</b>", styles["Heading3"]))
@@ -610,7 +536,7 @@ def export_pdf(patient, keyframe_path, figures, table_data, annotated_images,
 
     if annotated_images:
         story.append(PageBreak())
-        story.append(Paragraph("<b>Images annotées (angles)</b>", styles["Heading2"]))
+        story.append(Paragraph("<b>Images annotées (analyse frontale)</b>", styles["Heading2"]))
         story.append(Spacer(1, 0.2 * cm))
         for img in annotated_images:
             story.append(PDFImage(img, width=16 * cm, height=8 * cm))
@@ -690,21 +616,8 @@ if video and st.button("▶ Lancer l'analyse"):
         if c:
             phases.append((*c, "blue"))
 
-    step_mean, step_std, stepG_cm, stepD_cm, step_asym = compute_step_length_cm(
-        heelG, heelD, heelG_x, heelD_x, toeG_x, toeD_x, float(taille_cm)
-    )
-
-    st.subheader("📏 Paramètres spatio-temporels")
-    if step_mean is not None:
-        st.write(f"**Longueur de pas moyenne :** {step_mean:.1f} cm")
-        st.write(f"**Variabilité (±1σ) :** {step_std:.1f} cm")
-        if stepG_cm is not None and stepD_cm is not None:
-            st.write(f"**Pas G :** {stepG_cm:.1f} cm — **Pas D :** {stepD_cm:.1f} cm")
-        if step_asym is not None:
-            st.write(f"**Asymétrie pas (G/D) :** {step_asym:.1f} %")
-        st.caption("Estimation monocaméra 2D sans calibration métrique (échelle basée sur la taille).")
-    else:
-        st.warning("Longueur de pas non calculable.")
+    st.subheader("📐 Paramètres frontaux")
+    st.caption("Analyse frontale : genou (angle cuisse-jambe), arrière-pied, bassin et tronc.")
 
     st.subheader("⏱️ Temps du pas")
     col1, col2 = st.columns(2)
@@ -734,36 +647,51 @@ if video and st.button("▶ Lancer l'analyse"):
     table_data = []
     asym_rows = []
 
-    for joint in ["Tronc", "Hanche", "Genou", "Cheville"]:
+    metrics_pairs = [
+        ("Genou", "Genou G", "Genou D"),
+        ("Arriere-pied", "Arriere-pied G", "Arriere-pied D"),
+    ]
+
+    metrics_single = [
+        ("Bassin", "Bassin"),
+        ("Tronc", "Tronc"),
+    ]
+
+    for label, left_key, right_key in metrics_pairs:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4), gridspec_kw={"width_ratios": [2, 1]})
 
-        g_raw = np.array(data[f"{joint} G"], dtype=float)
-        d_raw = np.array(data[f"{joint} D"], dtype=float)
+        g_raw = np.array(data[left_key], dtype=float)
+        d_raw = np.array(data[right_key], dtype=float)
 
         g = smooth_clinical(g_raw, smooth_level=smooth)
         d = smooth_clinical(d_raw, smooth_level=smooth)
 
         ax1.plot(g, label="Gauche", color="red")
         ax1.plot(d, label="Droite", color="blue")
+        ax1.axhline(0, linestyle="--", linewidth=1)
+        ax1.set_ylim(-25, 25)
         for c0, c1, col in phases:
             ax1.axvspan(c0, c1, color=col, alpha=0.3)
-        ax1.set_title(f"{joint} – Analyse")
+        ax1.set_title(f"{label} – Analyse frontale")
+        ax1.set_ylabel("Angle (°)")
         ax1.legend()
 
         if show_norm:
-            norm = norm_curve(joint, len(g))
+            norm = norm_curve(left_key, len(g))
             norm = smooth_ma(norm, win=norm_smooth_win)
             ax2.plot(norm, color="green")
-            ax2.set_title("Norme (lissée)" if norm_smooth_win and norm_smooth_win > 1 else "Norme")
+            ax2.axhline(0, linestyle="--", linewidth=1)
+            ax2.set_ylim(-25, 25)
+            ax2.set_title("Norme (indicative)")
         else:
             ax2.axis("off")
 
         st.pyplot(fig)
 
-        fig_path = os.path.join(tempfile.gettempdir(), f"{joint}_plot.png")
+        fig_path = os.path.join(tempfile.gettempdir(), f"{label}_plot.png")
         fig.savefig(fig_path, bbox_inches="tight")
         plt.close(fig)
-        figures[joint] = fig_path
+        figures[label] = fig_path
 
         def stats(arr_filtered, arr_raw):
             mask = ~np.isnan(arr_raw)
@@ -775,21 +703,64 @@ if video and st.button("▶ Lancer l'analyse"):
         gmin, gmean, gmax, gmean_only = stats(g, g_raw)
         dmin, dmean, dmax, dmean_only = stats(d, d_raw)
 
-        table_data.append([f"{joint} Gauche", f"{gmin:.1f}", f"{gmean:.1f}", f"{gmax:.1f}"])
-        table_data.append([f"{joint} Droite", f"{dmin:.1f}", f"{dmean:.1f}", f"{dmax:.1f}"])
+        table_data.append([f"{label} Gauche", f"{gmin:.1f}", f"{gmean:.1f}", f"{gmax:.1f}"])
+        table_data.append([f"{label} Droite", f"{dmin:.1f}", f"{dmean:.1f}", f"{dmax:.1f}"])
 
         a = asym_percent(gmean_only, dmean_only)
         if a is None:
             asym_rows.append([
-                joint,
+                label,
                 f"{gmean_only:.1f}" if gmean_only is not None else "NA",
                 f"{dmean_only:.1f}" if dmean_only is not None else "NA",
                 "NA"
             ])
         else:
-            asym_rows.append([joint, f"{gmean_only:.1f}", f"{dmean_only:.1f}", f"{a:.1f}"])
+            asym_rows.append([label, f"{gmean_only:.1f}", f"{dmean_only:.1f}", f"{a:.1f}"])
 
-    st.subheader("↔️ Asymétries droite/gauche (angles)")
+    for label, key in metrics_single:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4), gridspec_kw={"width_ratios": [2, 1]})
+
+        raw = np.array(data[key], dtype=float)
+        val = smooth_clinical(raw, smooth_level=smooth)
+
+        ax1.plot(val, label=label, color="purple")
+        ax1.axhline(0, linestyle="--", linewidth=1)
+        ax1.set_ylim(-15, 15)
+        for c0, c1, col in phases:
+            ax1.axvspan(c0, c1, color=col, alpha=0.3)
+        ax1.set_title(f"{label} – Analyse frontale")
+        ax1.set_ylabel("Angle (°)")
+        ax1.legend()
+
+        if show_norm:
+            norm = norm_curve(key, len(val))
+            norm = smooth_ma(norm, win=norm_smooth_win)
+            ax2.plot(norm, color="green")
+            ax2.axhline(0, linestyle="--", linewidth=1)
+            ax2.set_ylim(-15, 15)
+            ax2.set_title("Norme (indicative)")
+        else:
+            ax2.axis("off")
+
+        st.pyplot(fig)
+
+        fig_path = os.path.join(tempfile.gettempdir(), f"{label}_plot.png")
+        fig.savefig(fig_path, bbox_inches="tight")
+        plt.close(fig)
+        figures[label] = fig_path
+
+        mask = ~np.isnan(raw)
+        if mask.sum() == 0:
+            vmin = vmean = vmax = np.nan
+        else:
+            vals = val[mask]
+            vmin = float(np.min(vals))
+            vmean = float(np.mean(vals))
+            vmax = float(np.max(vals))
+
+        table_data.append([label, f"{vmin:.1f}", f"{vmean:.1f}", f"{vmax:.1f}"])
+
+    st.subheader("↔️ Asymétries droite/gauche")
     for row in asym_rows:
         st.write(f"**{row[0]}** — Moy G: {row[1]}° | Moy D: {row[2]}° | Asym: {row[3]}%")
 
@@ -837,8 +808,6 @@ if video and st.button("▶ Lancer l'analyse"):
         st.image(cv2.cvtColor(ann, cv2.COLOR_BGR2RGB), caption=f"Image annotée {i+1} (frame {idx})")
 
     step_info = None
-    if step_mean is not None:
-        step_info = {"mean": step_mean, "std": step_std, "G": stepG_cm, "D": stepD_cm, "asym": step_asym}
 
     temporal_info = {
         "G_mean": step_time_G_mean,
