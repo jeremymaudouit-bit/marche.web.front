@@ -23,7 +23,7 @@ import streamlit.components.v1 as components
 # ==============================
 # CONFIG
 # ==============================
-st.set_page_config("GaitScan Pro (Vue arrière/frontale)", layout="wide")
+st.set_page_config("GaitScan Pro (Analyse frontale)", layout="wide")
 st.title("🏃 GaitScan Pro – Analyse Frontale / Vue arrière")
 FPS = 30
 
@@ -45,16 +45,16 @@ def load_pose():
 pose = load_pose()
 
 # ==============================
-# NORMES
+# NORMES INDICATIVES
 # ==============================
 def norm_curve(metric, n):
     x = np.linspace(0, 100, n)
 
     if metric in ["Genou G", "Genou D"]:
-        return np.interp(x, [0, 25, 50, 75, 100], [2, 5, 0, -5, 2])
+        return np.interp(x, [0, 25, 50, 75, 100], [1, 4, 0, -4, 1])
 
     if metric in ["Arriere-pied G", "Arriere-pied D"]:
-        return np.interp(x, [0, 25, 50, 75, 100], [1, 3, 0, -3, 1])
+        return np.interp(x, [0, 25, 50, 75, 100], [0.5, 2, 0, -2, 0.5])
 
     if metric == "Bassin":
         return np.interp(x, [0, 25, 50, 75, 100], [0, 2, 0, -2, 0])
@@ -77,7 +77,7 @@ def smooth_ma(y, win=7):
     return np.convolve(ypad, kernel, mode="valid")
 
 # ==============================
-# OUTLIERS + LISSAGE CLINIQUE
+# OUTLIERS + LISSAGE
 # ==============================
 def interp_nan(arr):
     arr = np.asarray(arr, dtype=float)
@@ -155,6 +155,7 @@ def angle_3pts(a, b, c):
     ba = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
     bc = np.asarray(c, dtype=float) - np.asarray(b, dtype=float)
 
+    # repère image -> repère math
     ba[1] *= -1
     bc[1] *= -1
 
@@ -164,31 +165,36 @@ def angle_3pts(a, b, c):
     return float(np.degrees(np.arccos(cosv)))
 
 def signed_angle_vs_vertical(p1, p2):
+    """
+    Angle signé du segment p1->p2 par rapport à la verticale.
+    """
     v = np.asarray(p2, dtype=float) - np.asarray(p1, dtype=float)
     vx = v[0]
     vy = -(v[1])
-    ang = np.degrees(np.arctan2(vx, vy + 1e-9))
-    return float(ang)
+    return float(np.degrees(np.arctan2(vx, vy + 1e-9)))
 
 def signed_angle_vs_horizontal(p1, p2):
+    """
+    Angle signé du segment p1->p2 par rapport à l'horizontale.
+    """
     v = np.asarray(p2, dtype=float) - np.asarray(p1, dtype=float)
     vx = v[0]
     vy = -(v[1])
-    ang = np.degrees(np.arctan2(vy, vx + 1e-9))
-    return float(ang)
+    return float(np.degrees(np.arctan2(vy, vx + 1e-9)))
 
 def angle_genou_frontal(hip, knee, ankle, side=None):
     """
     Déviation frontale du genou = angle cuisse/jambe.
     0° ~ alignement neutre.
     """
-    raw = angle_3pts(hip, knee, ankle)
-    dev = 180.0 - raw
+    raw = angle_3pts(hip, knee, ankle)   # proche de 180 si aligné
+    dev = 180.0 - raw                    # proche de 0 si aligné
 
     hip = np.asarray(hip, dtype=float)
     knee = np.asarray(knee, dtype=float)
     ankle = np.asarray(ankle, dtype=float)
 
+    # Signe basé sur la position du genou par rapport à la ligne hanche-cheville
     v1 = knee - hip
     v2 = ankle - hip
     cross = v1[0] * v2[1] - v1[1] * v2[0]
@@ -202,13 +208,39 @@ def angle_genou_frontal(hip, knee, ankle, side=None):
 
     return float(sign * abs(dev))
 
-def angle_arriere_pied_frontal(ankle, heel):
-    return signed_angle_vs_vertical(ankle, heel)
+def angle_arriere_pied_frontal(ankle, heel, side=None):
+    """
+    Déviation frontale stable de l'arrière-pied par rapport à la verticale.
+    On utilise le segment talon -> cheville, avec formule stable
+    pour éviter les sauts absurdes de type atan2 sur quadrant.
+    """
+    ankle = np.asarray(ankle, dtype=float)
+    heel = np.asarray(heel, dtype=float)
+
+    # segment talon -> cheville
+    v = ankle - heel
+    dx = v[0]
+    dy = v[1]
+
+    # déviation par rapport à la verticale, version stable
+    ang = np.degrees(np.arctan2(dx, abs(dy) + 1e-9))
+
+    # harmonisation visuelle G/D
+    if side == "G":
+        ang = -ang
+
+    return float(ang)
 
 def angle_bassin_frontal(hipL, hipR):
+    """
+    Obliquité pelvienne.
+    """
     return signed_angle_vs_horizontal(hipL, hipR)
 
 def angle_tronc_frontal(shL, shR, hipL, hipR):
+    """
+    Inclinaison latérale du tronc.
+    """
     mid_sh = (np.asarray(shL) + np.asarray(shR)) / 2.0
     mid_hip = (np.asarray(hipL) + np.asarray(hipR)) / 2.0
     return signed_angle_vs_vertical(mid_hip, mid_sh)
@@ -271,9 +303,6 @@ def process_video(path, conf):
     }
 
     heelG_y, heelD_y = [], []
-    heelG_x, heelD_x = [], []
-    toeG_x, toeD_x = [], []
-
     frames = []
 
     while cap.isOpened():
@@ -288,15 +317,12 @@ def process_video(path, conf):
                 res[k].append(np.nan)
             heelG_y.append(np.nan)
             heelD_y.append(np.nan)
-            heelG_x.append(np.nan)
-            heelD_x.append(np.nan)
-            toeG_x.append(np.nan)
-            toeD_x.append(np.nan)
             continue
 
         def ok(n):
             return kp.get(f"{n} vis", 0.0) >= conf
 
+        # Genou frontal = angle cuisse / jambe
         res["Genou G"].append(
             angle_genou_frontal(kp["Hanche G"], kp["Genou G"], kp["Cheville G"], side="G")
             if (ok("Hanche G") and ok("Genou G") and ok("Cheville G")) else np.nan
@@ -306,20 +332,23 @@ def process_video(path, conf):
             if (ok("Hanche D") and ok("Genou D") and ok("Cheville D")) else np.nan
         )
 
+        # Arrière-pied frontal stable
         res["Arriere-pied G"].append(
-            angle_arriere_pied_frontal(kp["Cheville G"], kp["Talon G"])
+            angle_arriere_pied_frontal(kp["Cheville G"], kp["Talon G"], side="G")
             if (ok("Cheville G") and ok("Talon G")) else np.nan
         )
         res["Arriere-pied D"].append(
-            angle_arriere_pied_frontal(kp["Cheville D"], kp["Talon D"])
+            angle_arriere_pied_frontal(kp["Cheville D"], kp["Talon D"], side="D")
             if (ok("Cheville D") and ok("Talon D")) else np.nan
         )
 
+        # Bassin
         res["Bassin"].append(
             angle_bassin_frontal(kp["Hanche G"], kp["Hanche D"])
             if (ok("Hanche G") and ok("Hanche D")) else np.nan
         )
 
+        # Tronc
         res["Tronc"].append(
             angle_tronc_frontal(kp["Epaule G"], kp["Epaule D"], kp["Hanche G"], kp["Hanche D"])
             if (ok("Epaule G") and ok("Epaule D") and ok("Hanche G") and ok("Hanche D")) else np.nan
@@ -328,14 +357,8 @@ def process_video(path, conf):
         heelG_y.append(float(kp["Talon G"][1]) if ok("Talon G") else np.nan)
         heelD_y.append(float(kp["Talon D"][1]) if ok("Talon D") else np.nan)
 
-        heelG_x.append(float(kp["Talon G"][0]) if ok("Talon G") else np.nan)
-        heelD_x.append(float(kp["Talon D"][0]) if ok("Talon D") else np.nan)
-
-        toeG_x.append(float(kp["Orteil G"][0]) if ok("Orteil G") else np.nan)
-        toeD_x.append(float(kp["Orteil D"][0]) if ok("Orteil D") else np.nan)
-
     cap.release()
-    return res, heelG_y, heelD_y, heelG_x, heelD_x, toeG_x, toeD_x, frames
+    return res, heelG_y, heelD_y, frames
 
 # ==============================
 # ANNOTATION IMAGES
@@ -351,7 +374,7 @@ def draw_segment_with_angle(img_bgr, p1, p2, ang_deg, label, color=(0, 255, 0)):
 
     txt = f"{label}: {ang_deg:.1f}°"
     tx, ty = P2[0] + 10, P2[1] - 10
-    cv2.rectangle(img_bgr, (tx - 4, ty - 30), (tx + 180, ty + 6), (0, 0, 0), -1)
+    cv2.rectangle(img_bgr, (tx - 4, ty - 30), (tx + 190, ty + 6), (0, 0, 0), -1)
     cv2.putText(
         img_bgr, txt, (tx, ty),
         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA
@@ -366,7 +389,7 @@ def annotate_frame(frame_bgr, kp, conf=0.30):
 
     out = frame_bgr.copy()
 
-    # Genoux
+    # Genou G
     if ok("Hanche G") and ok("Genou G") and ok("Cheville G"):
         draw_segment_with_angle(
             out, kp["Hanche G"], kp["Genou G"],
@@ -378,6 +401,7 @@ def annotate_frame(frame_bgr, kp, conf=0.30):
         A = (int(kp["Cheville G"][0] * w), int(kp["Cheville G"][1] * h))
         cv2.line(out, K, A, (0, 255, 0), 4)
 
+    # Genou D
     if ok("Hanche D") and ok("Genou D") and ok("Cheville D"):
         draw_segment_with_angle(
             out, kp["Hanche D"], kp["Genou D"],
@@ -389,18 +413,19 @@ def annotate_frame(frame_bgr, kp, conf=0.30):
         A = (int(kp["Cheville D"][0] * w), int(kp["Cheville D"][1] * h))
         cv2.line(out, K, A, (0, 255, 0), 4)
 
-    # Arrière-pied
+    # Arrière-pied G
     if ok("Cheville G") and ok("Talon G"):
         draw_segment_with_angle(
-            out, kp["Cheville G"], kp["Talon G"],
-            angle_arriere_pied_frontal(kp["Cheville G"], kp["Talon G"]),
+            out, kp["Talon G"], kp["Cheville G"],
+            angle_arriere_pied_frontal(kp["Cheville G"], kp["Talon G"], side="G"),
             "AP G"
         )
 
+    # Arrière-pied D
     if ok("Cheville D") and ok("Talon D"):
         draw_segment_with_angle(
-            out, kp["Cheville D"], kp["Talon D"],
-            angle_arriere_pied_frontal(kp["Cheville D"], kp["Talon D"]),
+            out, kp["Talon D"], kp["Cheville D"],
+            angle_arriere_pied_frontal(kp["Cheville D"], kp["Talon D"], side="D"),
             "AP D"
         )
 
@@ -425,7 +450,7 @@ def annotate_frame(frame_bgr, kp, conf=0.30):
     return out
 
 # ==============================
-# ASYMMETRY
+# ASYMETRIE
 # ==============================
 def asym_percent(left, right):
     if left is None or right is None:
@@ -439,7 +464,7 @@ def asym_percent(left, right):
 # PDF EXPORT
 # ==============================
 def export_pdf(patient, keyframe_path, figures, table_data, annotated_images,
-               step_info=None, asym_table=None, temporal_info=None, contact_fig_path=None):
+               asym_table=None, temporal_info=None, contact_fig_path=None):
     out_path = os.path.join(tempfile.gettempdir(), f"GaitScan_{patient['nom']}_{patient['prenom']}.pdf")
 
     doc = SimpleDocTemplate(
@@ -451,7 +476,7 @@ def export_pdf(patient, keyframe_path, figures, table_data, annotated_images,
     styles = getSampleStyleSheet()
     story = []
 
-    story.append(Paragraph("<b>GaitScan Pro – Analyse Frontale</b>", styles["Title"]))
+    story.append(Paragraph("<b>GaitScan Pro – Analyse Frontale / Vue arrière</b>", styles["Title"]))
     story.append(Spacer(1, 0.2 * cm))
 
     story.append(Paragraph(
@@ -536,7 +561,7 @@ def export_pdf(patient, keyframe_path, figures, table_data, annotated_images,
 
     if annotated_images:
         story.append(PageBreak())
-        story.append(Paragraph("<b>Images annotées (analyse frontale)</b>", styles["Heading2"]))
+        story.append(Paragraph("<b>Images annotées</b>", styles["Heading2"]))
         story.append(Spacer(1, 0.2 * cm))
         for img in annotated_images:
             story.append(PDFImage(img, width=16 * cm, height=8 * cm))
@@ -546,7 +571,7 @@ def export_pdf(patient, keyframe_path, figures, table_data, annotated_images,
     return out_path
 
 # ==============================
-# PDF VIEW + PRINT (browser-side)
+# PDF VIEW + PRINT
 # ==============================
 def pdf_viewer_with_print(pdf_bytes: bytes, height=800):
     b64 = base64.b64encode(pdf_bytes).decode("utf-8")
@@ -574,7 +599,7 @@ def pdf_viewer_with_print(pdf_bytes: bytes, height=800):
 with st.sidebar:
     nom = st.text_input("Nom", "DURAND")
     prenom = st.text_input("Prénom", "Jean")
-    camera_pos = st.selectbox("Angle de film", ["Devant", "Droite", "Gauche"])
+    camera_pos = st.selectbox("Angle de film", ["Devant", "Derrière"])
     phase_cote = st.selectbox("Phases", ["Aucune", "Droite", "Gauche", "Les deux"])
     smooth = st.slider("Lissage (patient)", 0, 10, 3)
     conf = st.slider("Seuil confiance", 0.1, 0.9, 0.3, 0.05)
@@ -584,7 +609,7 @@ with st.sidebar:
     show_norm = st.checkbox("Afficher la norme", value=True)
     norm_smooth_win = st.slider(
         "Lissage norme (simple)", 1, 21, 7, 2,
-        help="Moyenne glissante (impair conseillé). 1 = pas de lissage."
+        help="Moyenne glissante. 1 = pas de lissage."
     )
 
 video = st.file_uploader("Vidéo", ["mp4", "avi", "mov"])
@@ -597,7 +622,7 @@ if video and st.button("▶ Lancer l'analyse"):
     tmp.write(video.read())
     tmp.close()
 
-    data, heelG, heelD, heelG_x, heelD_x, toeG_x, toeD_x, frames = process_video(tmp.name, conf)
+    data, heelG, heelD, frames = process_video(tmp.name, conf)
     os.unlink(tmp.name)
 
     contactsG, heelG_s = detect_foot_contacts(heelG, fps=FPS)
@@ -657,18 +682,20 @@ if video and st.button("▶ Lancer l'analyse"):
         ("Tronc", "Tronc"),
     ]
 
+    # Courbes bilatérales
     for label, left_key, right_key in metrics_pairs:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4), gridspec_kw={"width_ratios": [2, 1]})
 
         g_raw = np.array(data[left_key], dtype=float)
         d_raw = np.array(data[right_key], dtype=float)
 
-        g = smooth_clinical(g_raw, smooth_level=smooth)
-        d = smooth_clinical(d_raw, smooth_level=smooth)
+        local_smooth = smooth + 2 if label == "Arriere-pied" else smooth
+        g = smooth_clinical(g_raw, smooth_level=local_smooth)
+        d = smooth_clinical(d_raw, smooth_level=local_smooth)
 
         ax1.plot(g, label="Gauche", color="red")
         ax1.plot(d, label="Droite", color="blue")
-        ax1.axhline(0, linestyle="--", linewidth=1)
+        ax1.axhline(0, linestyle="--", linewidth=1, color="black", alpha=0.6)
         ax1.set_ylim(-25, 25)
         for c0, c1, col in phases:
             ax1.axvspan(c0, c1, color=col, alpha=0.3)
@@ -680,7 +707,7 @@ if video and st.button("▶ Lancer l'analyse"):
             norm = norm_curve(left_key, len(g))
             norm = smooth_ma(norm, win=norm_smooth_win)
             ax2.plot(norm, color="green")
-            ax2.axhline(0, linestyle="--", linewidth=1)
+            ax2.axhline(0, linestyle="--", linewidth=1, color="black", alpha=0.6)
             ax2.set_ylim(-25, 25)
             ax2.set_title("Norme (indicative)")
         else:
@@ -717,6 +744,7 @@ if video and st.button("▶ Lancer l'analyse"):
         else:
             asym_rows.append([label, f"{gmean_only:.1f}", f"{dmean_only:.1f}", f"{a:.1f}"])
 
+    # Courbes globales
     for label, key in metrics_single:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4), gridspec_kw={"width_ratios": [2, 1]})
 
@@ -724,7 +752,7 @@ if video and st.button("▶ Lancer l'analyse"):
         val = smooth_clinical(raw, smooth_level=smooth)
 
         ax1.plot(val, label=label, color="purple")
-        ax1.axhline(0, linestyle="--", linewidth=1)
+        ax1.axhline(0, linestyle="--", linewidth=1, color="black", alpha=0.6)
         ax1.set_ylim(-15, 15)
         for c0, c1, col in phases:
             ax1.axvspan(c0, c1, color=col, alpha=0.3)
@@ -736,7 +764,7 @@ if video and st.button("▶ Lancer l'analyse"):
             norm = norm_curve(key, len(val))
             norm = smooth_ma(norm, win=norm_smooth_win)
             ax2.plot(norm, color="green")
-            ax2.axhline(0, linestyle="--", linewidth=1)
+            ax2.axhline(0, linestyle="--", linewidth=1, color="black", alpha=0.6)
             ax2.set_ylim(-15, 15)
             ax2.set_title("Norme (indicative)")
         else:
@@ -790,7 +818,7 @@ if video and st.button("▶ Lancer l'analyse"):
     fig_contact.savefig(contact_fig_path, bbox_inches="tight")
     plt.close(fig_contact)
 
-    st.subheader("📸 Captures annotées (angles)")
+    st.subheader("📸 Captures annotées")
     num_photos = st.slider("Nombre d'images extraites", 1, 10, 3)
     total_frames = len(frames)
     idxs = np.linspace(0, total_frames - 1, num_photos, dtype=int)
@@ -806,8 +834,6 @@ if video and st.button("▶ Lancer l'analyse"):
         annotated_images.append(out_img)
 
         st.image(cv2.cvtColor(ann, cv2.COLOR_BGR2RGB), caption=f"Image annotée {i+1} (frame {idx})")
-
-    step_info = None
 
     temporal_info = {
         "G_mean": step_time_G_mean,
@@ -831,7 +857,6 @@ if video and st.button("▶ Lancer l'analyse"):
         figures=figures,
         table_data=table_data,
         annotated_images=annotated_images,
-        step_info=step_info,
         asym_table=asym_rows,
         temporal_info=temporal_info,
         contact_fig_path=contact_fig_path
